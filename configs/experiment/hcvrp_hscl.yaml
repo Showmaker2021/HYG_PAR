@@ -1,0 +1,74 @@
+# @package _global_
+
+# Inherit from default experiment configs
+defaults:
+  - override /model: parco.yaml
+  - override /env: hcvrp.yaml
+  - override /callbacks: default.yaml
+  - override /trainer: default.yaml
+  - override /logger: null # set to wandb.yaml or tensorboard.yaml if needed
+
+# Dataset & Agent parameters
+generator_params:
+  num_loc: 100
+  num_agents: 7
+
+# Model hyperparameters with HSCL
+model:
+  policy:
+    _target_: "parco.models.policy.PARCOPolicy"
+    env_name: "${env.name}"
+    agent_handler: "highprob"
+    embed_dim: 128
+    norm_after: false
+    normalization: "rms"
+    use_final_norm: true
+    parallel_gated_kwargs:
+      mlp_activation: "silu"
+    context_embedding_kwargs:
+      normalization: "rms"
+      norm_after: false
+      use_final_norm: true
+      parallel_gated_kwargs:
+        mlp_activation: "silu"
+      hscl_config:
+        use_hscl: true
+        num_clusters: 4
+        dense_gpu_safe_max_agents: 32
+        inter_group_top_r: 2
+  batch_size: 128
+  val_batch_size: ${model.batch_size}
+  test_batch_size: ${model.batch_size}
+  train_data_size: 100_000
+  val_data_size: 10_000
+  test_data_size: 10_000
+  optimizer_kwargs:
+    lr: 1e-4
+    weight_decay: 0.0
+  lr_scheduler: "MultiStepLR"
+  lr_scheduler_kwargs:
+    milestones: [80, 95]
+    gamma: 0.1
+  num_augment: 8
+  train_min_agents: 3
+  train_max_agents: ${env.generator_params.num_agents}
+  train_min_size: 60
+  train_max_size: ${env.generator_params.num_loc}
+
+logger:
+  wandb:
+    project: "parco-${env.name}"
+    tags: ["parco", "${env.name}", "hscl"]
+    group: "${env.name}_n${env.generator_params.num_loc}_m${env.generator_params.num_agents}"
+    name: "parco-hscl"
+
+trainer:
+  max_epochs: 100
+  devices: 1
+  strategy: "auto"
+
+seed: 1234
+
+callbacks:
+  model_checkpoint:
+    monitor: "val/reward/n60_m5"

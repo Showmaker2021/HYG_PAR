@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "tasks": [
+    {
+      "branch_name": "main",
+      "worktree_path": "D:\\parco",
+      "status": "active",
+      "created_at": "2026-09-20T01:28:04.753Z",
+      "updated_at": "2026-09-20T01:39:26.041Z"
+    }
+  ]
+}

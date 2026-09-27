@@ -119,6 +119,9 @@ class PARCODecoder(AttentionModelDecoder):
         self, td, env, embeddings, num_starts: int = 0
     ) -> Tuple[TensorDict, RL4COEnvBase, PrecomputedCache]:
         """Precompute the embeddings cache before the decoder is called"""
+        if hasattr(self.context_embedding, "reset"):
+            self.context_embedding.reset()
+
         cached = self._precompute_cache(embeddings, num_starts=num_starts)
 
         # when we do multi-sampling, only node embeddings are repeated

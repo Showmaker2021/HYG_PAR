@@ -1,8 +1,11 @@
+from typing import Optional
+
 import torch
 import torch.nn as nn
 
 from rl4co.utils.ops import gather_by_index
 
+from parco.models.hscl import HSCLCommunicationLayer, HSCLConfig
 from parco.models.nn.transformer import (
     Normalization,
     TransformerBlock as CommunicationLayer,
@@ -20,6 +23,7 @@ class BaseMultiAgentContextEmbedding(nn.Module):
         use_communication: bool, whether to use communication layers
         num_heads: int, number of attention heads
         num_communication_layers: int, number of communication layers
+        hscl_config: Optional[HSCLConfig], configuration for HSCL
         **communication_kwargs: dict, additional arguments for the communication layers
     """
 
@@ -32,10 +36,13 @@ class BaseMultiAgentContextEmbedding(nn.Module):
         use_communication=True,
         use_final_norm=False,
         num_communication_layers=1,
+        hscl_config: Optional[HSCLConfig] = None,
         **communication_kwargs,  # note: see TransformerBlock
     ):
         super(BaseMultiAgentContextEmbedding, self).__init__()
-        self.embed_dim = embed_dim
+        if isinstance(hscl_config, dict):
+            hscl_config = HSCLConfig(**hscl_config)
+        self.hscl_config = hscl_config
 
         # Feature projection
         self.proj_agent_feats = nn.Linear(agent_feat_dim, embed_dim, bias=linear_bias)
@@ -43,7 +50,7 @@ class BaseMultiAgentContextEmbedding(nn.Module):
         self.project_context = nn.Linear(embed_dim * 4, embed_dim, bias=linear_bias)
 
         if use_communication:
-            self.communication_layers = nn.Sequential(
+            comm_layers = nn.Sequential(
                 *(
                     CommunicationLayer(
                         embed_dim=embed_dim,
@@ -52,6 +59,18 @@ class BaseMultiAgentContextEmbedding(nn.Module):
                     for _ in range(num_communication_layers)
                 )
             )
+            if hscl_config is not None:
+                self.communication_layers = HSCLCommunicationLayer(
+                    original_layers=comm_layers,
+                    embed_dim=embed_dim,
+                    num_heads=communication_kwargs.get("num_heads", 8),
+                    config=hscl_config,
+                    normalization=communication_kwargs.get("normalization", "instance"),
+                    norm_after=communication_kwargs.get("norm_after", False),
+                    feedforward_hidden=communication_kwargs.get("feedforward_hidden", None),
+                )
+            else:
+                self.communication_layers = comm_layers
         else:
             self.communication_layers = nn.Identity()
 
@@ -60,6 +79,11 @@ class BaseMultiAgentContextEmbedding(nn.Module):
             if use_final_norm
             else None
         )
+
+    def reset(self):
+        """Reset communication layer state (e.g. history buffer) for new episode."""
+        if hasattr(self.communication_layers, "reset_history"):
+            self.communication_layers.reset_history()
 
     def _agent_state_embedding(self, embeddings, td, num_agents, num_cities):
         """Embedding for agent-wise state features"""

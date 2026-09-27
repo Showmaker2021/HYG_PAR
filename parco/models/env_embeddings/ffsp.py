@@ -1,6 +1,9 @@
+from typing import Optional
+
 import torch
 import torch.nn as nn
 
+from parco.models.hscl import HSCLCommunicationLayer, HSCLConfig
 from parco.models.nn.transformer import TransformerBlock as CommunicationLayer
 
 class FFSPInitEmbeddings(nn.Module):
@@ -41,6 +44,7 @@ class FFSPContextEmbedding(nn.Module):
         embed_dim: int = 256,
         scale_factor: int = 10,
         use_comm_layer: bool = True,
+        hscl_config: Optional[HSCLConfig] = None,
         **communication_layer_kwargs
     ) -> None:
         
@@ -50,12 +54,32 @@ class FFSPContextEmbedding(nn.Module):
         self.dyn_context = nn.Linear(2, embed_dim)
         self.scale_factor = scale_factor
         self.use_comm_layer = use_comm_layer
+        if isinstance(hscl_config, dict):
+            hscl_config = HSCLConfig(**hscl_config)
+        self.hscl_config = hscl_config
         # optional layers
         if self.use_comm_layer:
-            self.communication_layer = CommunicationLayer(
+            comm_layer = CommunicationLayer(
                 embed_dim=embed_dim,
                 **communication_layer_kwargs
             )
+            if hscl_config is not None:
+                self.communication_layer = HSCLCommunicationLayer(
+                    original_layers=comm_layer,
+                    embed_dim=embed_dim,
+                    num_heads=communication_layer_kwargs.get("num_heads", 16),
+                    config=hscl_config,
+                    normalization=communication_layer_kwargs.get("normalization", "instance"),
+                    norm_after=communication_layer_kwargs.get("norm_after", False),
+                    feedforward_hidden=communication_layer_kwargs.get("feedforward_hidden", None),
+                )
+            else:
+                self.communication_layer = comm_layer
+
+    def reset(self):
+        """Reset communication layer state (e.g. history buffer) for new episode."""
+        if hasattr(self.communication_layer, "reset_history"):
+            self.communication_layer.reset_history()
 
     def forward(self, ma_emb_proj, td):
         # (b, ma)
@@ -88,7 +112,7 @@ class FFSPDynamicEmbedding(nn.Module):
 
     def forward(self, td):
         job_dyn = torch.stack(
-            (td["job_location"][:, :-1], td["t_job_ready"][:, :-1] / self.scale_factor), 
+            (td["job_location"], td["t_job_ready"] / self.scale_factor), 
             dim=-1
         ).to(torch.float32)
         # shape: (batch, pomo, jobs, 3*embedding)

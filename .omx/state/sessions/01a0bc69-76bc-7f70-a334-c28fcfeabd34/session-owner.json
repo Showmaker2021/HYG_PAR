@@ -1,0 +1,14 @@
+{
+  "session_id": "01a0bc69-76bc-7f70-a334-c28fcfeabd34",
+  "native_session_id": "01a0bc69-76bc-7f70-a334-c28fcfeabd34",
+  "started_at": "2026-09-20T01:24:15.489Z",
+  "cwd": "D:\\parco",
+  "state_root": "D:\\parco\\.omx\\state\\sessions\\01a0bc69-76bc-7f70-a334-c28fcfeabd34",
+  "pid": 42316,
+  "platform": "win32",
+  "identity_schema_version": 2,
+  "process_identity": {
+    "platform": "win32",
+    "birth": "134343406614976002"
+  }
+}

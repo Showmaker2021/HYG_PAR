@@ -1,0 +1,14 @@
+{
+  "sessions": {
+    "01a0bc69-76bc-7f70-a334-c28fcfeabd34": {
+      "ordinary_no_progress_guard": {
+        "fingerprint": "ordinary|đúng, section 7.3 nên là giai đoạn 0 trước hscl đầy đủ. mình đồng ý với tài liệu của bạn hơn thứ tự triển khai vừa nói. lý do không chỉ là overhead. nếu spectral clustering chiếm đáng kể thời gian, toàn bộ luận điểm “parco vẫn nhanh nhờ parallel decoding” sẽ yếu đi, dù objective có tăng. đây là rủi ro lớn nhất của hscl. mình sẽ làm thử nghiệm tối thiểu theo thứ tự này: 1. benchmark trên context tensor thật của parco, ngay trước vị trí `self.communication_layers(context_embed)` trong [communication.py](/d:/parco/parco/models/env_embeddings/communication.py:91). 2. so sánh thời gian của: - full communication layer hiện tại; - tạo history buffer + affinity `w`; - eigendecomposition/spectral clustering; - hypergraph attention dự kiến. 3. đo riêng forward và backward, với batch size đúng config, `m = 5, 10, 20, 30, 50, 60`; mốc `60` là cần thiết vì validation omdcpdp có `m=60`. 4. lặp trên hcvrp, omdcpdp, ffsp, vì ffsp có `embed_dim=256` và decoder/context khác routing. 5. thử các chu kỳ re-cluster `k = 1, 2, 4, 8`, cùng hai baseline rẻ: fixed groups và approximate eigensolver. tiêu chí ra quyết định nên rõ từ đầu: - `< 10%` overhead end-to-end: triển khai spectral hscl đầy đủ. - `10–20%`: chỉ re-cluster định kỳ và cache membership giữa các bước. - `> 20%`: chuyển sang soft/learned grouping hoặc approximate spectral method; không nên đầu tư vào bản full eigendecomposition. một bổ sung nhỏ: đừng chỉ đo eigen-decomposition so với decoder. cần đo tổng rollout/inference vì hscl nằm ở mỗi decode step, và số bước có thể khác theo policy. nếu hscl giảm conflict hoặc giảm số rollout steps, overhead từng bước vẫn có thể được bù lại ở cấp instance. vậy roadmap tốt nhất là: `7.3 benchmark -> hscl routing prototype -> train/ablation -> fmcr -> ffsp adaptation`.",
+        "first_seen_at": "2026-09-20T01:39:24.512Z",
+        "last_seen_at": "2026-09-20T01:39:24.512Z",
+        "repeat_count": 1,
+        "last_turn_id": "01a0bc77-8ac5-7e82-8eaa-ef914bb5d362",
+        "last_thread_id": null
+      }
+    }
+  }
+}
