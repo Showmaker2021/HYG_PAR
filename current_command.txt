@@ -1,0 +1,29 @@
+================================================================================
+CÁC LỆNH HUẤN LUYỆN CHÍNH THỨC CHO MÔ HÌNH CD-HG v2.1 + FMCR (ĐỀ XUẤT CHÍNH)
+================================================================================
+
+1. Kiểm tra nhanh (Sanity Check - 30 giây):
+python train.py experiment=omdcpdp_cdhg trainer.fast_dev_run=true env.val_file=null
+
+2. Bài toán OMDCPDP (Open Multi-Depot Pickup and Delivery - Khuyên chạy trước):
+python train.py experiment=omdcpdp_cdhg
+
+3. Bài toán HCVRP (Heterogeneous Capacitated Vehicle Routing):
+python train.py experiment=hcvrp_cdhg
+
+4. Bài toán FFSP (Flexible Flow Shop Scheduling):
+- Bản chuẩn FFSP50:
+python train.py experiment=ffsp_cdhg env=ffsp/ffsp50
+- Bản nhẹ FFSP20:
+python train.py experiment=ffsp_cdhg env=ffsp/ffsp20
+
+--------------------------------------------------------------------------------
+CÁC LỆNH ABLATION VÀ BASELINE (DÙNG ĐỂ SO SÁNH TRONG BÀI BÁO)
+--------------------------------------------------------------------------------
+- Chạy PARCO nguyên bản (NeurIPS 2025):
+python train.py experiment=omdcpdp
+python train.py experiment=hcvrp
+
+- Chạy HSCL v1 (Spectral Clustering):
+python train.py experiment=omdcpdp_hscl
+python train.py experiment=hcvrp_hscl

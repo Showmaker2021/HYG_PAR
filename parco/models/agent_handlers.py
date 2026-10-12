@@ -1,6 +1,6 @@
 import abc
 
-from typing import Callable, List, Union
+from typing import Callable, List, Union, Tuple
 
 import torch
 
@@ -201,6 +201,157 @@ class NoHandler(AgentHandler):
         return actions, None
 
 
+class FairnessMultiRoundAgentHandler(AgentHandler):
+    """Fairness-Aware Multi-Round Conflict Resolver (FMCR).
+
+    Extends PARCO's priority conflict handler with:
+    1. Long-term Fairness Accumulation: Prevents agent starvation by boosting
+       priority for agents that were previously forced to halt.
+       priority_i = prob_i + gamma * fairness_counter_i
+    2. Multi-Round Second-Best Re-proposal: In case of collisions, losing agents
+       in Round 1 select their highest-probability unallocated alternative in Round 2
+       instead of immediately being forced into wasteful halting.
+
+    Args:
+        fairness_weight (float): Weight gamma for fairness counter. Default 0.5.
+        decay_rate (float): Decay factor alpha for winners (0.0 = full reset). Default 0.5.
+        max_rounds (int): Maximum conflict resolution rounds per step. Default 2.
+    """
+
+    def __init__(
+        self,
+        fairness_weight: float = 0.5,
+        decay_rate: float = 0.5,
+        max_rounds: int = 2,
+        *args,
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+        self.fairness_weight = fairness_weight
+        self.decay_rate = decay_rate
+        self.max_rounds = max_rounds
+        self.fairness_counter = None
+
+    def reset(self):
+        """Reset fairness counter for a new rollout/batch."""
+        self.fairness_counter = None
+
+    def _preprocess_actions(self, actions: torch.Tensor, *args, **kwargs) -> torch.Tensor:
+        # Handled in custom __call__
+        indices = torch.arange(actions.size(1), device=actions.device).repeat(actions.size(0), 1)
+        return actions, indices
+
+    def __call__(
+        self,
+        actions: torch.Tensor,
+        replacement_value: Union[torch.Tensor, int] = -1,
+        td=None,
+        exclude_values: Union[torch.Tensor, int, List] = None,
+        probs: torch.Tensor = None,
+        randomize: bool = False,
+        **kwargs,
+    ) -> Tuple[torch.Tensor, torch.Tensor, float]:
+        exclude_values = self.exclude_values if exclude_values is None else exclude_values
+        if isinstance(exclude_values, int):
+            exclude_values = [exclude_values]
+        if not isinstance(exclude_values, torch.Tensor) and exclude_values is not None:
+            exclude_values = torch.tensor(exclude_values, device=actions.device)
+
+        B, M = actions.shape
+        device = actions.device
+
+        # Initialize fairness counter if not yet created or batch size changed
+        if (
+            self.fairness_counter is None
+            or self.fairness_counter.shape != actions.shape
+            or self.fairness_counter.device != device
+        ):
+            self.fairness_counter = torch.zeros(B, M, device=device, dtype=torch.float32)
+
+        # Base action probability / priority
+        if probs is not None:
+            if probs.max() <= 0:
+                prob_vals = probs.exp()
+            else:
+                prob_vals = probs
+            action_probs = gather_by_index(prob_vals, actions, dim=-1)
+        else:
+            action_probs = torch.ones_like(actions, dtype=torch.float32)
+            prob_vals = None
+
+        if randomize:
+            gumbel_noise = -torch.log(-torch.log(torch.rand_like(action_probs).clamp_min(1e-9)))
+            action_probs = action_probs + gumbel_noise
+
+        # Total Priority = instantaneous confidence + long-term fairness score
+        priorities = action_probs + self.fairness_weight * self.fairness_counter
+
+        final_actions = actions.clone()
+        resolved_mask = torch.zeros(B, M, dtype=torch.bool, device=device)
+        claimed_nodes = [set() for _ in range(B)]
+
+        # --- ROUND 1: Initial Proposals ---
+        _, sorted_agent_idx = torch.sort(priorities, dim=-1, descending=True, stable=True)
+
+        for b in range(B):
+            for agent_idx in sorted_agent_idx[b]:
+                agent = agent_idx.item()
+                act = actions[b, agent].item()
+                is_excludable = (exclude_values is not None) and (act in exclude_values)
+                if is_excludable or (act not in claimed_nodes[b]):
+                    resolved_mask[b, agent] = True
+                    if not is_excludable:
+                        claimed_nodes[b].add(act)
+
+        # --- ROUND 2+: Second-Best Re-proposal for Collision Losers ---
+        curr_round = 1
+        while curr_round < self.max_rounds and (~resolved_mask).any():
+            curr_round += 1
+            if prob_vals is None or td is None:
+                break
+
+            action_mask = td.get("action_mask", None) if isinstance(td, dict) or hasattr(td, "get") else None
+
+            for b in range(B):
+                unresolved = [ag.item() for ag in sorted_agent_idx[b] if not resolved_mask[b, ag]]
+                for agent in unresolved:
+                    p_agent = prob_vals[b, agent].clone()
+                    if action_mask is not None:
+                        p_agent.masked_fill_(~action_mask[b, agent].bool(), -1e9)
+
+                    # Mask out all actions already claimed by Round 1/earlier winners
+                    for claimed in claimed_nodes[b]:
+                        p_agent[claimed] = -1e9
+
+                    # Mask out the action that was rejected in Round 1
+                    p_agent[actions[b, agent]] = -1e9
+
+                    best_alt_prob, best_alt_act = p_agent.max(dim=-1)
+                    if best_alt_prob > -1e8:  # Feasible alternative found
+                        alt_act = best_alt_act.item()
+                        is_excludable = (exclude_values is not None) and (alt_act in exclude_values)
+                        final_actions[b, agent] = alt_act
+                        resolved_mask[b, agent] = True
+                        if not is_excludable:
+                            claimed_nodes[b].add(alt_act)
+
+        # Halted agents are those still unresolved after max_rounds
+        handling_mask = ~resolved_mask
+
+        # Apply replacement value (e.g. current_node / depot)
+        if isinstance(replacement_value, int):
+            final_actions[handling_mask] = replacement_value
+        else:
+            final_actions[handling_mask] = replacement_value[handling_mask]
+
+        # Update Fairness Counter
+        self.fairness_counter[resolved_mask] = self.fairness_counter[resolved_mask] * self.decay_rate
+        self.fairness_counter[handling_mask] = self.fairness_counter[handling_mask] + 1.0
+
+        halting_ratio = handling_mask.sum().float() / handling_mask.numel()
+        return final_actions, handling_mask if not self.return_none_mask else None, halting_ratio
+
+
 AGENT_HANDLER_REGISTRY = {
     "first": FirstPrecedenceAgentHandler,
     "random": RandomAgentHandler,
@@ -208,6 +359,8 @@ AGENT_HANDLER_REGISTRY = {
     "highprob": HighestProbabilityAgentHandler,
     "smallestpath": SmallestPathToClosure,
     "pos": POSAgentHandler,
+    "fmcr": FairnessMultiRoundAgentHandler,
+    "fairness": FairnessMultiRoundAgentHandler,
     "none": NoHandler,
 }
 
@@ -216,3 +369,4 @@ def get_agent_handler(
     name: str, registry: dict = AGENT_HANDLER_REGISTRY, **config
 ) -> Callable:
     return registry[name](**config)
+

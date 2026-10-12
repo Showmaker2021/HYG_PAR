@@ -6,6 +6,7 @@ import torch.nn as nn
 from rl4co.utils.ops import gather_by_index
 
 from parco.models.hscl import HSCLCommunicationLayer, HSCLConfig
+from parco.models.hscl_v2 import CDHGCommunicationWrapper
 from parco.models.nn.transformer import (
     Normalization,
     TransformerBlock as CommunicationLayer,
@@ -60,15 +61,23 @@ class BaseMultiAgentContextEmbedding(nn.Module):
                 )
             )
             if hscl_config is not None:
-                self.communication_layers = HSCLCommunicationLayer(
-                    original_layers=comm_layers,
-                    embed_dim=embed_dim,
-                    num_heads=communication_kwargs.get("num_heads", 8),
-                    config=hscl_config,
-                    normalization=communication_kwargs.get("normalization", "instance"),
-                    norm_after=communication_kwargs.get("norm_after", False),
-                    feedforward_hidden=communication_kwargs.get("feedforward_hidden", None),
-                )
+                if getattr(hscl_config, "version", "v1") == "v2":
+                    self.communication_layers = CDHGCommunicationWrapper(
+                        embed_dim=embed_dim,
+                        config=hscl_config,
+                        num_heads=communication_kwargs.get("num_heads", 4),
+                        **communication_kwargs,
+                    )
+                else:
+                    self.communication_layers = HSCLCommunicationLayer(
+                        original_layers=comm_layers,
+                        embed_dim=embed_dim,
+                        num_heads=communication_kwargs.get("num_heads", 8),
+                        config=hscl_config,
+                        normalization=communication_kwargs.get("normalization", "instance"),
+                        norm_after=communication_kwargs.get("norm_after", False),
+                        feedforward_hidden=communication_kwargs.get("feedforward_hidden", None),
+                    )
             else:
                 self.communication_layers = comm_layers
         else:
@@ -112,7 +121,10 @@ class BaseMultiAgentContextEmbedding(nn.Module):
         )
         # [B, M, hdim, 4] -> [B, M, hdim]
         context_embed = self.project_context(context_embed)
-        h_comm = self.communication_layers(context_embed)
+        if isinstance(self.communication_layers, CDHGCommunicationWrapper):
+            h_comm = self.communication_layers(context_embed, embeddings=embeddings, td=td)
+        else:
+            h_comm = self.communication_layers(context_embed)
         if self.norm is not None:
             h_comm = self.norm(h_comm)
         return h_comm

@@ -48,6 +48,11 @@ def run(cfg: DictConfig) -> Tuple[dict, dict]:
     log.info("Instantiating loggers...")
     logger: List[Logger] = utils.instantiate_loggers(cfg.get("logger"), model)
 
+    if not logger or cfg.trainer.get("fast_dev_run"):
+        callbacks = [
+            c for c in callbacks if not isinstance(c, L.pytorch.callbacks.LearningRateMonitor)
+        ]
+
     log.info("Instantiating trainer...")
     trainer: RL4COTrainer = hydra.utils.instantiate(
         cfg.trainer,

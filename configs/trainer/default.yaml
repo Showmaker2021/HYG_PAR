@@ -6,6 +6,7 @@ default_root_dir: ${paths.output_dir}
 gradient_clip_val: 1.0
 accelerator: "gpu"
 precision: "16-mixed"
+fast_dev_run: false
 
 # Fast distributed training: comment out to use on single GPU
 # devices: 1 # change number of devices

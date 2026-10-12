@@ -113,6 +113,9 @@ class PARCODecodingStrategy(metaclass=abc.ABCMeta):
     ):
         """Pre decoding hook. This method is called before the main decoding operation."""
 
+        if hasattr(self.agent_handler, "reset"):
+            self.agent_handler.reset()
+
         if self.num_samples >= 1:
             # Expand td to batch_size * num_samples
             td = batchify(td, self.num_samples)
