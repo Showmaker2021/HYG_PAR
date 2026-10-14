@@ -1,8 +1,10 @@
 ================================================================================
-CÁC LỆNH HUẤN LUYỆN CHÍNH THỨC CHO MÔ HÌNH CD-HG v2.1 + FMCR (ĐỀ XUẤT CHÍNH)
+CÁC LỆNH HUẤN LUYỆN CHÍNH THỨC CHO MÔ HÌNH CD-HG v2.1 (CHỈ CÓ CD-HG - KHUYÊN DÙNG)
 ================================================================================
+(Cấu hình mặc định hiện tại sử dụng agent_handler='highprob' chuẩn của PARCO gốc,
+vừa đo đạc chính xác sức mạnh của Conflict-Driven Hypergraph vừa đạt tốc độ GPU tối đa)
 
-1. Kiểm tra nhanh (Sanity Check - 30 giây):
+1. Kiểm tra nhanh đường ống (Sanity Check - 30 giây):
 python train.py experiment=omdcpdp_cdhg trainer.fast_dev_run=true env.val_file=null
 
 2. Bài toán OMDCPDP (Open Multi-Depot Pickup and Delivery - Khuyên chạy trước):
@@ -16,6 +18,12 @@ python train.py experiment=hcvrp_cdhg
 python train.py experiment=ffsp_cdhg env=ffsp/ffsp50
 - Bản nhẹ FFSP20:
 python train.py experiment=ffsp_cdhg env=ffsp/ffsp20
+
+--------------------------------------------------------------------------------
+NẾU MUỐN BẬT THÊM FMCR (Fairness-Aware Conflict Resolver - đã vectorize 100% GPU):
+--------------------------------------------------------------------------------
+Thêm 'model.policy.agent_handler=fmcr' vào cuối lệnh, ví dụ:
+python train.py experiment=omdcpdp_cdhg model.policy.agent_handler=fmcr
 
 --------------------------------------------------------------------------------
 CÁC LỆNH ABLATION VÀ BASELINE (DÙNG ĐỂ SO SÁNH TRONG BÀI BÁO)

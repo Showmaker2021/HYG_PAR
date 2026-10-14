@@ -17,7 +17,7 @@ model:
     _target_: "parco.models.policy.PARCOMultiStagePolicy"
     num_stages: "${env.generator_params.num_stage}"
     env_name: "${env.name}"
-    agent_handler: "fmcr"
+    agent_handler: "highprob"
     embed_dim: 256
     num_encoder_layers: 3
     num_heads: 16

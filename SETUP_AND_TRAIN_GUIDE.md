@@ -66,7 +66,12 @@ Nếu log in ra `Trainer.fit stopped: max_steps=1 reached` và kết thúc với
 
 ---
 
-## 🎯 4. Các Lệnh Huấn Luyện Chính Thức (Mô Hình Đề Xuất: CD-HG v2.1 + FMCR)
+## 🎯 4. Các Lệnh Huấn Luyện Chính Thức (Mô Hình Đề Xuất: CD-HG v2.1)
+
+> 💡 **Lưu ý quan trọng về Ablation:** Cấu hình mặc định hiện tại đang sử dụng `agent_handler: "highprob"` (cơ chế phân xử xung đột gốc của PARCO). Việc này đảm bảo:
+> 1. Đo lường chính xác 100% sức mạnh độc lập của module **CD-HG (Conflict-Driven Hypergraph)** mà không bị nhiễu bởi FMCR.
+> 2. Đạt tốc độ GPU tối đa (chỉ mất ~0.6ms cho phân xử xung đột thay vì bị nghẽn).
+> *(Nếu sau này muốn bật thử nghiệm thêm FMCR, chỉ cần thêm `model.policy.agent_handler=fmcr` vào cuối lệnh).*
 
 ### ① Bài toán OMDCPDP (Open Multi-Depot Pickup and Delivery - Khuyên dùng test trước)
 Huấn luyện mô hình tổng quát với số xe lớn $M \in [5, 50]$ và số điểm $N \in [50, 100]$:

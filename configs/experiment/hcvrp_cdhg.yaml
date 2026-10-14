@@ -18,10 +18,7 @@ model:
   policy:
     _target_: "parco.models.policy.PARCOPolicy"
     env_name: "${env.name}"
-    agent_handler: "fmcr"
-    agent_handler_kwargs:
-      fairness_weight: 0.5
-      max_rounds: 2
+    agent_handler: "highprob"
     embed_dim: 128
     norm_after: false
     normalization: "rms"

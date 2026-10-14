@@ -18,10 +18,7 @@ model:
   policy:
     _target_: "parco.models.policy.PARCOPolicy"
     env_name: "${env.name}"
-    agent_handler: "fmcr"
-    agent_handler_kwargs:
-      fairness_weight: 0.5
-      max_rounds: 2
+    agent_handler: "highprob"
     embed_dim: 128
     norm_after: false
     normalization: "rms"
@@ -54,7 +51,7 @@ model:
     milestones: [80, 95]
     gamma: 0.1
   num_augment: 8
-  train_min_agents: 5
+  train_min_agents: 10
   train_max_agents: ${env.generator_params.num_agents}
   train_min_size: 50
   train_max_size: ${env.generator_params.num_loc}
