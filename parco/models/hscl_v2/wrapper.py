@@ -17,12 +17,18 @@ class CDHGCommunicationWrapper(nn.Module):
         K = getattr(config, "num_prototypes", getattr(config, "num_clusters", 8))
         tau = getattr(config, "tau", 1.0)
         topk = getattr(config, "topk", 2)
+        parallel_gated_kwargs = kwargs.get("parallel_gated_kwargs", None)
+        feedforward_hidden = kwargs.get("feedforward_hidden", None)
+        normalization = kwargs.get("normalization", "rms")
         self.cd_layer = CDHypergraphLayer(
             d=embed_dim,
             K=K,
             num_heads=num_heads,
             tau=tau,
             topk=topk,
+            norm_type=normalization,
+            parallel_gated_kwargs=parallel_gated_kwargs,
+            feedforward_hidden=feedforward_hidden,
         )
         self.last_H = None
         self.last_p = None

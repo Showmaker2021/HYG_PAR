@@ -37,10 +37,13 @@ class PARCORLModule(SymNCO):
         train_max_size: int = 100,
         val_test_num_agents: int = 10,
         allow_multi_dataloaders: bool = True,
+        aux_loss_weight: float = 0.0,
         **kwargs,
     ):
         # Pass no baseline to superclass since there are multiple custom baselines
         super().__init__(env, policy, **kwargs)
+
+        self.aux_loss_weight = aux_loss_weight
 
         self.num_augment = num_augment
         self.augment = StateAugmentation(num_augment=self.num_augment)
@@ -143,12 +146,23 @@ class PARCORLModule(SymNCO):
             )
             loss = loss_ps + self.beta * loss_ss + self.alpha * loss_inv
 
+            # Auxiliary Conflict-Driven Supervision Loss (CD-HG)
+            loss_aux = torch.tensor(0.0, device=reward.device)
+            if self.aux_loss_weight > 0.0:
+                context_emb = getattr(self.policy.decoder, "context_embedding", None)
+                comm = getattr(context_emb, "communication_layers", None) if context_emb is not None else None
+                if comm is not None and getattr(comm, "last_H", None) is not None and getattr(comm, "last_p", None) is not None:
+                    from parco.models.hscl_v2.losses import intent_overlap_loss
+                    loss_aux = intent_overlap_loss(comm.last_H, comm.last_p)
+                    loss = loss + self.aux_loss_weight * loss_aux
+
             out.update(
                 {
                     "loss": loss,
                     "loss_ss": loss_ss,
                     "loss_ps": loss_ps,
                     "loss_inv": loss_inv,
+                    "loss_aux": loss_aux,
                 }
             )
 

@@ -37,6 +37,7 @@ model:
         num_prototypes: 4
         tau: 1.0
         topk: 2
+  aux_loss_weight: 0.05
   batch_size: 128
   val_batch_size: ${model.batch_size}
   test_batch_size: ${model.batch_size}

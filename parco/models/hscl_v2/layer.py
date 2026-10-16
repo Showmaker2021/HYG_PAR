@@ -4,11 +4,15 @@ import torch.nn.functional as F
 from typing import Optional, Tuple
 
 
+from parco.models.nn.transformer import ParallelGatedMLP
+
+
 class CDHypergraphLayer(nn.Module):
-    """Conflict-Driven Hypergraph Layer (CD-HG v2.1).
+    """Conflict-Driven Hypergraph Layer (CD-HG v2.2).
 
     Replaces flat pairwise all-to-all attention with a differentiable,
-    soft-overlapping hypergraph message-passing mechanism.
+    soft-overlapping hypergraph message-passing mechanism followed by
+    a Transformer-style Feed-Forward Network (FFN).
 
     Args:
         d (int): Hidden feature dimension.
@@ -18,6 +22,8 @@ class CDHypergraphLayer(nn.Module):
         topk (int): Sparsity constraint (number of hyperedges each agent can belong to).
         dropout (float): Dropout probability.
         norm_type (str): Normalization type: 'rms' or 'layer'.
+        parallel_gated_kwargs (Optional[dict]): ParallelGatedMLP kwargs (e.g. SiLU activation).
+        feedforward_hidden (Optional[int]): Hidden dimension of FFN if not gated.
     """
 
     def __init__(
@@ -29,6 +35,8 @@ class CDHypergraphLayer(nn.Module):
         topk: int = 2,
         dropout: float = 0.0,
         norm_type: str = "rms",
+        parallel_gated_kwargs: Optional[dict] = None,
+        feedforward_hidden: Optional[int] = None,
     ):
         super().__init__()
         self.d = d
@@ -62,9 +70,22 @@ class CDHypergraphLayer(nn.Module):
         if norm_type == "rms" and hasattr(nn, "RMSNorm"):
             self.norm_edge = nn.RMSNorm(d)
             self.norm_node = nn.RMSNorm(d)
+            self.norm_ffn = nn.RMSNorm(d)
         else:
             self.norm_edge = nn.LayerNorm(d)
             self.norm_node = nn.LayerNorm(d)
+            self.norm_ffn = nn.LayerNorm(d)
+
+        # 6. Feed-Forward Network (matching TransformerBlock in PARCO)
+        if parallel_gated_kwargs is not None:
+            self.ffn = ParallelGatedMLP(hidden_size=d, **parallel_gated_kwargs)
+        else:
+            ffn_hidden = feedforward_hidden or (4 * d)
+            self.ffn = nn.Sequential(
+                nn.Linear(d, ffn_hidden),
+                nn.SiLU(),
+                nn.Linear(ffn_hidden, d),
+            )
 
     def forward(
         self,
@@ -104,11 +125,14 @@ class CDHypergraphLayer(nn.Module):
         # Sigmoid per pair (i, k) -> allows overlapping hyperedge membership
         H = torch.sigmoid(logits)
 
-        # Step 3: Top-k sparsity per agent (preserves gradient flow for selected top-k)
+        # Step 3: Top-k sparsity per agent with Straight-Through Estimator (STE)
+        # In forward: hard top-k sparsity is applied.
+        # In backward: gradients flow to ALL prototypes through H.
         if self.topk is not None and self.topk < self.K:
             _, top_indices = H.topk(self.topk, dim=-1)
             sparse_mask = torch.zeros_like(H).scatter_(-1, top_indices, 1.0)
-            H = H * sparse_mask
+            H_sparse = H * sparse_mask
+            H = (H_sparse - H).detach() + H
 
         # Step 4: Mask out inactive / dead / padded agents
         if mask is not None:
@@ -134,6 +158,9 @@ class CDHypergraphLayer(nn.Module):
         # (c) Hyperedge -> Node Broadcast: h_refined = h + Ht @ We(e2) -> [B, M, d]
         e_proj = self.We(e2)
         h_msg = torch.matmul(Ht, e_proj)
-        h_out = self.norm_node(h + h_msg)
+        h_mid = self.norm_node(h + h_msg)
+
+        # Step 7: Transformer-style Feed-Forward Network (FFN) + Residual + Norm
+        h_out = self.norm_ffn(h_mid + self.ffn(h_mid))
 
         return h_out, H

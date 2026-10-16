@@ -50,6 +50,7 @@ model:
     pointer_check_nan: False
     use_decoder_mha_mask: False
     use_ham_encoder: True
+  aux_loss_weight: 0.05
   batch_size: 50
   val_batch_size: 100
   test_batch_size: 100

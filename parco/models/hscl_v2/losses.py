@@ -63,10 +63,11 @@ def intent_overlap_loss(
     if valid_pair_mask.sum() == 0:
         return torch.tensor(0.0, device=H.device, requires_grad=True)
 
-    s_pred = S_hat[valid_pair_mask].clamp(1e-6, 1.0 - 1e-6)
+    s_pred = S_hat[valid_pair_mask]
     t_target = T_int[valid_pair_mask]
 
-    return F.binary_cross_entropy(s_pred, t_target)
+    # Frobenius norm / MSE alignment is continuous, smooth, and fully safe for AMP autocast
+    return F.mse_loss(s_pred.float(), t_target.float())
 
 
 def realized_collision_loss(
@@ -103,10 +104,10 @@ def realized_collision_loss(
     if valid_pair_mask.sum() == 0:
         return torch.tensor(0.0, device=H.device, requires_grad=True)
 
-    s_pred = S_hat[valid_pair_mask].clamp(1e-6, 1.0 - 1e-6)
-    t_target = T_col[valid_pair_mask]
+    s_pred = S_hat[valid_pair_mask].float().clamp(1e-6, 1.0 - 1e-6)
+    t_target = T_col[valid_pair_mask].float()
 
-    # Weighted BCE
+    # Weighted BCE under explicit float32 to be safe for AMP autocast
     weights = torch.where(t_target == 1.0, pos_weight, 1.0)
     loss = F.binary_cross_entropy(s_pred, t_target, weight=weights)
     return loss
