@@ -125,14 +125,11 @@ class CDHypergraphLayer(nn.Module):
         # Sigmoid per pair (i, k) -> allows overlapping hyperedge membership
         H = torch.sigmoid(logits)
 
-        # Step 3: Top-k sparsity per agent with Straight-Through Estimator (STE)
-        # In forward: hard top-k sparsity is applied.
-        # In backward: gradients flow to ALL prototypes through H.
+        # Step 3: Top-k sparsity per agent (standard hard top-k gating)
         if self.topk is not None and self.topk < self.K:
             _, top_indices = H.topk(self.topk, dim=-1)
             sparse_mask = torch.zeros_like(H).scatter_(-1, top_indices, 1.0)
-            H_sparse = H * sparse_mask
-            H = (H_sparse - H).detach() + H
+            H = H * sparse_mask
 
         # Step 4: Mask out inactive / dead / padded agents
         if mask is not None:
