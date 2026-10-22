@@ -33,6 +33,9 @@ class CDHypergraphLayer(nn.Module):
         num_heads: int = 4,
         tau: float = 1.0,
         topk: int = 2,
+        topk_method: str = "ste",
+        use_prototype_mask: bool = True,
+        eps_proto: float = 1e-4,
         dropout: float = 0.0,
         norm_type: str = "rms",
         parallel_gated_kwargs: Optional[dict] = None,
@@ -43,6 +46,9 @@ class CDHypergraphLayer(nn.Module):
         self.K = K
         self.tau = tau
         self.topk = topk
+        self.topk_method = topk_method
+        self.use_prototype_mask = use_prototype_mask
+        self.eps_proto = eps_proto
 
         # 1. K Learnable Hyperedge Prototypes [K, d]
         self.proto = nn.Parameter(torch.randn(K, d) * (d ** -0.5))
@@ -122,14 +128,19 @@ class CDHypergraphLayer(nn.Module):
         if prior is not None and beta > 0.0:
             logits = logits + beta * prior
 
-        # Sigmoid per pair (i, k) -> allows overlapping hyperedge membership
+        # Sigmoid per pair (i, k) -> continuous, unnormalized membership strength
         H = torch.sigmoid(logits)
 
-        # Step 3: Top-k sparsity per agent (standard hard top-k gating)
+        # Step 3: Top-k sparsity with unnormalized sigmoid values and optional STE
         if self.topk is not None and self.topk < self.K:
             _, top_indices = H.topk(self.topk, dim=-1)
             sparse_mask = torch.zeros_like(H).scatter_(-1, top_indices, 1.0)
-            H = H * sparse_mask
+            if self.topk_method == "ste":
+                # Forward: continuous unnormalized sigmoid values at topk, 0 elsewhere
+                # Backward: gradient flows through H for all entries via STE
+                H = H * sparse_mask + (H - H.detach()) * (1.0 - sparse_mask)
+            else:
+                H = H * sparse_mask
 
         # Step 4: Mask out inactive / dead / padded agents
         if mask is not None:
@@ -148,8 +159,18 @@ class CDHypergraphLayer(nn.Module):
         h_proj = self.Wn(h)
         e = torch.matmul(Ht.transpose(1, 2), h_proj)
 
-        # (b) Inter-Hyperedge Global Reasoning: e2 = MHA(e, e, e) -> [B, K, d]
-        e2, _ = self.edge_mha(e, e, e)
+        # (b) Inter-Hyperedge Global Reasoning with Prototype Mask
+        key_padding_mask = None
+        if self.use_prototype_mask:
+            de_raw = H.sum(dim=1)  # [B, K]
+            key_padding_mask = (de_raw < self.eps_proto)  # True means masked out in PyTorch MHA
+            # Safety: Ensure not all prototypes in a sample are masked to avoid MHA NaN
+            all_masked = key_padding_mask.all(dim=-1)
+            if all_masked.any():
+                largest_proto = de_raw[all_masked].argmax(dim=-1, keepdim=True)
+                key_padding_mask[all_masked] = key_padding_mask[all_masked].scatter(-1, largest_proto, False)
+
+        e2, _ = self.edge_mha(e, e, e, key_padding_mask=key_padding_mask)
         e2 = self.norm_edge(e + e2)
 
         # (c) Hyperedge -> Node Broadcast: h_refined = h + Ht @ We(e2) -> [B, M, d]

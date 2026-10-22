@@ -38,12 +38,22 @@ class PARCORLModule(SymNCO):
         val_test_num_agents: int = 10,
         allow_multi_dataloaders: bool = True,
         aux_loss_weight: float = 0.0,
+        lambda_int: float = 0.0,
+        lambda_col: float = 0.0,
+        lambda_bal: float = 0.0,
+        lambda_sp: float = 0.0,
+        warmup_ratio: float = 0.1,
         **kwargs,
     ):
         # Pass no baseline to superclass since there are multiple custom baselines
         super().__init__(env, policy, **kwargs)
 
         self.aux_loss_weight = aux_loss_weight
+        self.lambda_int = lambda_int if lambda_int > 0.0 else aux_loss_weight
+        self.lambda_col = lambda_col
+        self.lambda_bal = lambda_bal
+        self.lambda_sp = lambda_sp
+        self.warmup_ratio = warmup_ratio
 
         self.num_augment = num_augment
         self.augment = StateAugmentation(num_augment=self.num_augment)
@@ -146,15 +156,68 @@ class PARCORLModule(SymNCO):
             )
             loss = loss_ps + self.beta * loss_ss + self.alpha * loss_inv
 
-            # Auxiliary Conflict-Driven Supervision Loss (CD-HG)
+            # Auxiliary Conflict-Driven Supervision Loss (CD-HG v2.1)
             loss_aux = torch.tensor(0.0, device=reward.device)
-            if self.aux_loss_weight > 0.0:
-                context_emb = getattr(self.policy.decoder, "context_embedding", None)
-                comm = getattr(context_emb, "communication_layers", None) if context_emb is not None else None
-                if comm is not None and getattr(comm, "last_H", None) is not None and getattr(comm, "last_p", None) is not None:
-                    from parco.models.hscl_v2.losses import intent_overlap_loss
-                    loss_aux = intent_overlap_loss(comm.last_H, comm.last_p)
-                    loss = loss + self.aux_loss_weight * loss_aux
+            loss_int = torch.tensor(0.0, device=reward.device)
+            loss_col = torch.tensor(0.0, device=reward.device)
+            loss_bal = torch.tensor(0.0, device=reward.device)
+            loss_sp = torch.tensor(0.0, device=reward.device)
+            pair_auc = torch.tensor(0.5, device=reward.device)
+
+            context_emb = getattr(self.policy.decoder, "context_embedding", None)
+            comm = getattr(context_emb, "communication_layers", None) if context_emb is not None else None
+            H = getattr(comm, "last_H", None) if comm is not None else None
+            p = getattr(comm, "last_p", None) if comm is not None else None
+
+            if comm is not None and H is not None:
+                from parco.models.hscl_v2.losses import (
+                    intent_overlap_loss,
+                    realized_collision_loss,
+                    anti_collapse_losses,
+                    compute_pair_auc,
+                )
+
+                # Linear warmup factor (10% first epochs/steps)
+                total_steps = 1000
+                trainer = getattr(self, "_trainer", None)
+                if trainer is not None and getattr(trainer, "estimated_stepping_batches", None):
+                    total_steps = self.trainer.estimated_stepping_batches
+                warmup_steps = max(1, int(total_steps * self.warmup_ratio))
+                cur_step = getattr(self, "global_step", warmup_steps)
+                warmup_factor = min(1.0, max(0.0, cur_step / warmup_steps))
+
+                # Update prior beta_t (beta_t decays linearly to 0 after warmup)
+                if hasattr(comm, "set_beta"):
+                    decay_factor = max(0.0, 1.0 - (cur_step / warmup_steps))
+                    comm.set_beta(comm.initial_beta * decay_factor)
+
+                # 1. L_int
+                if self.lambda_int > 0.0 and p is not None:
+                    loss_int = intent_overlap_loss(H, p)
+
+                # 2. L_col
+                actions = out.get("actions", None)
+                if actions is not None:
+                    act_last = actions[..., -1] if actions.dim() == 3 else actions
+                    if self.lambda_col > 0.0:
+                        loss_col = realized_collision_loss(H, act_last)
+                    pair_auc = torch.tensor(compute_pair_auc(H, act_last), device=reward.device)
+
+                # 3. L_bal, L_sp
+                if self.lambda_bal > 0.0 or self.lambda_sp > 0.0:
+                    l_bal, l_sp = anti_collapse_losses(H)
+                    if self.lambda_bal > 0.0:
+                        loss_bal = l_bal
+                    if self.lambda_sp > 0.0:
+                        loss_sp = l_sp
+
+                loss_aux = warmup_factor * (
+                    self.lambda_int * loss_int
+                    + self.lambda_col * loss_col
+                    + self.lambda_bal * loss_bal
+                    + self.lambda_sp * loss_sp
+                )
+                loss = loss + loss_aux
 
             out.update(
                 {
@@ -163,6 +226,11 @@ class PARCORLModule(SymNCO):
                     "loss_ps": loss_ps,
                     "loss_inv": loss_inv,
                     "loss_aux": loss_aux,
+                    "loss_int": loss_int,
+                    "loss_col": loss_col,
+                    "loss_bal": loss_bal,
+                    "loss_sp": loss_sp,
+                    "pair_auc": pair_auc,
                 }
             )
 

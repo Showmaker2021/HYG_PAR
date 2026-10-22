@@ -37,7 +37,16 @@ model:
         num_prototypes: 8
         tau: 1.0
         topk: 2
-  aux_loss_weight: 0.05
+        use_gate: true                 # Flag: Gated residual h_flat + tanh(g)*(h_hg - h)
+        topk_method: "ste"             # Flag: 'ste' (Straight-Through) or 'hard'
+        use_prototype_mask: true       # Flag: mask out empty prototypes (sum H < eps) in MHA
+        use_spatial_prior: true        # Flag: spatial distance prior beta_t * pi_ik
+        beta_prior: 1.0                # Initial weight of geographic prior
+  lambda_int: 0.1                      # Flag: Intent overlap loss weight
+  lambda_col: 0.1                      # Flag: Realized collision loss weight
+  lambda_bal: 0.01                     # Flag: Load balancing loss weight
+  lambda_sp: 0.01                      # Flag: Sparsity loss weight
+  warmup_ratio: 0.1                    # Flag: Linear warmup for losses & decay for beta
   batch_size: 128
   val_batch_size: ${model.batch_size}
   test_batch_size: ${model.batch_size}

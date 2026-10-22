@@ -63,6 +63,7 @@ class BaseMultiAgentContextEmbedding(nn.Module):
             if hscl_config is not None:
                 if getattr(hscl_config, "version", "v1") == "v2":
                     self.communication_layers = CDHGCommunicationWrapper(
+                        original_layers=comm_layers,
                         embed_dim=embed_dim,
                         config=hscl_config,
                         num_heads=communication_kwargs.get("num_heads", 4),
