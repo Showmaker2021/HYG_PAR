@@ -1,0 +1,15 @@
+# @package _global_
+# Ablation 1: Gate Only (All auxiliary losses disabled: lambda_int=0, lambda_col=0, lambda_bal=0, lambda_sp=0)
+
+defaults:
+  - override /experiment: omdcpdp_cdhg.yaml
+
+model:
+  lambda_int: 0.0
+  lambda_col: 0.0
+  lambda_bal: 0.0
+  lambda_sp: 0.0
+
+logger:
+  wandb:
+    name: "cdhg-gate-only"

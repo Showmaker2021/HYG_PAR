@@ -222,6 +222,7 @@ class PARCOPolicy(nn.Module):
 
         if return_actions:
             outdict["actions"] = actions
+            outdict["actions_init"] = getattr(decode_strategy, "collected_actions_init", actions)
 
         if return_init_embeds:  # for SymNCO
             outdict["init_embeds"] = init_embeds

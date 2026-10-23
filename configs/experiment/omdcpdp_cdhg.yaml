@@ -13,7 +13,7 @@ env:
     num_loc: 100
     num_agents: 50
 
-# Model hyperparameters with Conflict-Driven Hypergraph (CD-HG v2.1) + FMCR
+# Model hyperparameters with Conflict-Driven Hypergraph (CD-HG v2.1 Hybrid)
 model:
   policy:
     _target_: "parco.models.policy.PARCOPolicy"
@@ -42,10 +42,12 @@ model:
         use_prototype_mask: true       # Flag: mask out empty prototypes (sum H < eps) in MHA
         use_spatial_prior: true        # Flag: spatial distance prior beta_t * pi_ik
         beta_prior: 1.0                # Initial weight of geographic prior
-  lambda_int: 0.1                      # Flag: Intent overlap loss weight
-  lambda_col: 0.1                      # Flag: Realized collision loss weight
-  lambda_bal: 0.01                     # Flag: Load balancing loss weight
-  lambda_sp: 0.01                      # Flag: Sparsity loss weight
+        aux_detach_input: true         # Flag: detach h for H generation to isolate aux loss from encoder
+  lr_gate: 1e-3                        # Flag: Dedicated learning rate for gate parameter (10x base lr)
+  lambda_int: 0.0                      # Flag: Intent overlap loss weight (default 0)
+  lambda_col: 0.1                      # Flag: Realized collision loss weight (default 0.1)
+  lambda_bal: 0.0                      # Flag: Load balancing loss weight (default 0)
+  lambda_sp: 0.0                       # Flag: Sparsity loss weight (default 0)
   warmup_ratio: 0.1                    # Flag: Linear warmup for losses & decay for beta
   batch_size: 128
   val_batch_size: ${model.batch_size}
@@ -69,17 +71,11 @@ model:
 logger:
   wandb:
     project: "parco-${env.name}"
-    tags: ["parco", "${env.name}", "cdhg", "fmcr"]
+    tags: ["parco", "${env.name}", "cdhg-v2-1-hybrid"]
     group: "${env.name}_n${env.generator_params.num_loc}_m${env.generator_params.num_agents}"
-    name: "cdhg-fmcr"
+    name: "cdhg-hybrid"
 
 trainer:
   max_epochs: 100
-  devices: 1
-  strategy: "auto"
 
 seed: 1234
-
-callbacks:
-  model_checkpoint:
-    monitor: "val/reward/n100_m20"

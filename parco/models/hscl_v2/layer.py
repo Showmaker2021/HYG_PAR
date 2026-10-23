@@ -36,6 +36,7 @@ class CDHypergraphLayer(nn.Module):
         topk_method: str = "ste",
         use_prototype_mask: bool = True,
         eps_proto: float = 1e-4,
+        aux_detach_input: bool = True,
         dropout: float = 0.0,
         norm_type: str = "rms",
         parallel_gated_kwargs: Optional[dict] = None,
@@ -49,6 +50,7 @@ class CDHypergraphLayer(nn.Module):
         self.topk_method = topk_method
         self.use_prototype_mask = use_prototype_mask
         self.eps_proto = eps_proto
+        self.aux_detach_input = aux_detach_input
 
         # 1. K Learnable Hyperedge Prototypes [K, d]
         self.proto = nn.Parameter(torch.randn(K, d) * (d ** -0.5))
@@ -121,7 +123,8 @@ class CDHypergraphLayer(nn.Module):
         e_bar_in = e_bar.detach() if detach_e_bar else e_bar
 
         # Step 1: Compute intent-augmented representations u_i [B, M, d]
-        u = self.g(torch.cat([h, e_bar_in], dim=-1))
+        h_intent = h.detach() if self.aux_detach_input else h
+        u = self.g(torch.cat([h_intent, e_bar_in], dim=-1))
 
         # Step 2: Compute pairwise prototype similarity logits [B, M, K]
         logits = torch.matmul(u, self.proto.t()) / self.tau

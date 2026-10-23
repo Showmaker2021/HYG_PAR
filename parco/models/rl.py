@@ -43,6 +43,7 @@ class PARCORLModule(SymNCO):
         lambda_bal: float = 0.0,
         lambda_sp: float = 0.0,
         warmup_ratio: float = 0.1,
+        lr_gate: float = 1e-3,
         **kwargs,
     ):
         # Pass no baseline to superclass since there are multiple custom baselines
@@ -54,6 +55,7 @@ class PARCORLModule(SymNCO):
         self.lambda_bal = lambda_bal
         self.lambda_sp = lambda_sp
         self.warmup_ratio = warmup_ratio
+        self.lr_gate = lr_gate
 
         self.num_augment = num_augment
         self.augment = StateAugmentation(num_augment=self.num_augment)
@@ -82,6 +84,29 @@ class PARCORLModule(SymNCO):
         # Force env to have as num_agents and num_locs as the maximum number of agents and locations
         self.env.generator.num_loc = self.train_max_size
         self.env.generator.num_agents = self.train_max_agents
+
+    def configure_optimizers(self, parameters=None):
+        if parameters is None:
+            gate_params = []
+            other_params = []
+            for name, param in self.named_parameters():
+                if not param.requires_grad:
+                    continue
+                if "gate" in name:
+                    gate_params.append(param)
+                else:
+                    other_params.append(param)
+
+            if len(gate_params) > 0 and self.lr_gate is not None:
+                base_lr = self.optimizer_kwargs.get("lr", 1e-4)
+                opt_kwargs_other = {k: v for k, v in self.optimizer_kwargs.items() if k != "lr"}
+                parameters = [
+                    {"params": other_params, "lr": base_lr, **opt_kwargs_other},
+                    {"params": gate_params, "lr": self.lr_gate, "weight_decay": 0.0},
+                ]
+            else:
+                parameters = self.parameters()
+        return super().configure_optimizers(parameters=parameters)
 
     def shared_step(
         self, batch: Any, batch_idx: int, phase: str, dataloader_idx: int = None
@@ -195,13 +220,38 @@ class PARCORLModule(SymNCO):
                 if self.lambda_int > 0.0 and p is not None:
                     loss_int = intent_overlap_loss(H, p)
 
-                # 2. L_col
-                actions = out.get("actions", None)
-                if actions is not None:
-                    act_last = actions[..., -1] if actions.dim() == 3 else actions
-                    if self.lambda_col > 0.0:
-                        loss_col = realized_collision_loss(H, act_last)
-                    pair_auc = torch.tensor(compute_pair_auc(H, act_last), device=reward.device)
+                # 2. L_col (computed on tentative actions BEFORE conflict handler)
+                actions_init = out.get("actions_init", out.get("actions", None))
+                if actions_init is not None:
+                    if actions_init.dim() == 3:
+                        num_steps = actions_init.shape[-1]
+                        hist_H = getattr(comm, "history_H", None)
+                        if hist_H is not None and len(hist_H) == num_steps:
+                            step_losses = []
+                            step_aucs = []
+                            for s in range(num_steps):
+                                act_s = actions_init[..., s]
+                                H_s = hist_H[s]
+                                if self.lambda_col > 0.0:
+                                    step_losses.append(realized_collision_loss(H_s, act_s))
+                                auc_s = compute_pair_auc(H_s, act_s)
+                                if auc_s != 0.5:
+                                    step_aucs.append(auc_s)
+                            if len(step_losses) > 0:
+                                loss_col = torch.stack(step_losses).mean()
+                            if len(step_aucs) > 0:
+                                pair_auc = torch.tensor(sum(step_aucs) / len(step_aucs), device=reward.device)
+                            else:
+                                pair_auc = torch.tensor(compute_pair_auc(H, actions_init[..., -1]), device=reward.device)
+                        else:
+                            act_target = actions_init[..., -1]
+                            if self.lambda_col > 0.0:
+                                loss_col = realized_collision_loss(H, act_target)
+                            pair_auc = torch.tensor(compute_pair_auc(H, act_target), device=reward.device)
+                    else:
+                        if self.lambda_col > 0.0:
+                            loss_col = realized_collision_loss(H, actions_init)
+                        pair_auc = torch.tensor(compute_pair_auc(H, actions_init), device=reward.device)
 
                 # 3. L_bal, L_sp
                 if self.lambda_bal > 0.0 or self.lambda_sp > 0.0:
@@ -219,6 +269,39 @@ class PARCORLModule(SymNCO):
                 )
                 loss = loss + loss_aux
 
+            # Hypergraph statistics & Gate logging
+            gate_val = getattr(comm, "gate", torch.tensor(0.0)).item() if comm is not None and hasattr(comm, "gate") else 0.0
+            prior_active = getattr(comm, "spatial_prior_active", False) if comm is not None else False
+
+            if H is not None:
+                deg = H.sum(dim=1)
+                active_mask = (deg > 0.01)
+                active_hyperedges_mean = active_mask.float().sum(dim=-1).mean()
+                hyperedge_size_mean = deg[active_mask].mean() if active_mask.any() else torch.tensor(0.0, device=H.device)
+                hyperedge_size_max = deg.max()
+            else:
+                active_hyperedges_mean = torch.tensor(0.0, device=reward.device)
+                hyperedge_size_mean = torch.tensor(0.0, device=reward.device)
+                hyperedge_size_max = torch.tensor(0.0, device=reward.device)
+
+            aux_logs = {
+                f"{phase}/loss_ss": loss_ss.item() if torch.is_tensor(loss_ss) else float(loss_ss),
+                f"{phase}/loss_aux": loss_aux.item() if torch.is_tensor(loss_aux) else float(loss_aux),
+                f"{phase}/loss_int": loss_int.item() if torch.is_tensor(loss_int) else float(loss_int),
+                f"{phase}/loss_col": loss_col.item() if torch.is_tensor(loss_col) else float(loss_col),
+                f"{phase}/loss_bal": loss_bal.item() if torch.is_tensor(loss_bal) else float(loss_bal),
+                f"{phase}/loss_sp": loss_sp.item() if torch.is_tensor(loss_sp) else float(loss_sp),
+                f"{phase}/pair_auc": pair_auc.item() if torch.is_tensor(pair_auc) else float(pair_auc),
+                f"{phase}/gate_val": gate_val,
+                f"{phase}/spatial_prior_active": float(prior_active),
+                f"{phase}/active_hyperedges": active_hyperedges_mean.item() if torch.is_tensor(active_hyperedges_mean) else float(active_hyperedges_mean),
+            }
+            if hasattr(self, "log_dict"):
+                try:
+                    self.log_dict(aux_logs, on_step=(phase == "train"), on_epoch=True, prog_bar=False, sync_dist=True)
+                except Exception:
+                    pass
+
             out.update(
                 {
                     "loss": loss,
@@ -231,8 +314,25 @@ class PARCORLModule(SymNCO):
                     "loss_bal": loss_bal,
                     "loss_sp": loss_sp,
                     "pair_auc": pair_auc,
+                    "gate_val": gate_val,
+                    "spatial_prior_active": prior_active,
+                    "active_hyperedges_mean": active_hyperedges_mean,
+                    "hyperedge_size_mean": hyperedge_size_mean,
+                    "hyperedge_size_max": hyperedge_size_max,
                 }
             )
 
         metrics = self.log_metrics(out, phase, dataloader_idx=dataloader_idx)
-        return {"loss": out.get("loss", None), **metrics}
+        return {
+            "loss": out.get("loss", None),
+            "loss_ss": out.get("loss_ss", 0.0),
+            "loss_aux": out.get("loss_aux", 0.0),
+            "loss_int": out.get("loss_int", 0.0),
+            "loss_col": out.get("loss_col", 0.0),
+            "loss_bal": out.get("loss_bal", 0.0),
+            "loss_sp": out.get("loss_sp", 0.0),
+            "pair_auc": out.get("pair_auc", 0.5),
+            "gate_val": out.get("gate_val", 0.0),
+            "spatial_prior_active": out.get("spatial_prior_active", False),
+            **metrics,
+        }

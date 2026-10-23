@@ -1,0 +1,15 @@
+# @package _global_
+# Ablation 2: Gate + Collision Loss Only (lambda_col=0.1, others=0)
+
+defaults:
+  - override /experiment: omdcpdp_cdhg.yaml
+
+model:
+  lambda_int: 0.0
+  lambda_col: 0.1
+  lambda_bal: 0.0
+  lambda_sp: 0.0
+
+logger:
+  wandb:
+    name: "cdhg-gate-col"

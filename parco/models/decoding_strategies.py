@@ -92,6 +92,7 @@ class PARCODecodingStrategy(metaclass=abc.ABCMeta):
 
         # initialize buffers
         self.actions = []
+        self.actions_init = []
         self.logprobs = []
         self.handling_masks = []
         self.halting_ratios = []
@@ -153,6 +154,7 @@ class PARCODecodingStrategy(metaclass=abc.ABCMeta):
         if self.num_samples > 0 and self.select_best:
             logprobs, actions, td, env = self._select_best(logprobs, actions, td, env)
 
+        self.collected_actions_init = torch.stack(self.actions_init, -1) if len(self.actions_init) > 0 else actions
         return logprobs, actions, td, env, halting_ratios
 
     def step(
@@ -176,6 +178,7 @@ class PARCODecodingStrategy(metaclass=abc.ABCMeta):
 
         logprobs, actions, td = self._step(logprobs, mask, td, **kwargs)
         actions_init = actions.clone()
+        self.actions_init.append(actions_init)
 
         # Solve conflicts via agent handler
         replacement_value = td[self.replacement_value_key]  # replace with previous node

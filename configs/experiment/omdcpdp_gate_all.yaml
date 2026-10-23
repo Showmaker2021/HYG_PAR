@@ -1,0 +1,15 @@
+# @package _global_
+# Ablation 3: Gate + All Auxiliary Losses (lambda_int=0.1, lambda_col=0.1, lambda_bal=0.01, lambda_sp=0.01)
+
+defaults:
+  - override /experiment: omdcpdp_cdhg.yaml
+
+model:
+  lambda_int: 0.1
+  lambda_col: 0.1
+  lambda_bal: 0.01
+  lambda_sp: 0.01
+
+logger:
+  wandb:
+    name: "cdhg-gate-all"
